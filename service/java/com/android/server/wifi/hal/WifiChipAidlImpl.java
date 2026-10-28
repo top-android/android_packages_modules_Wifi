@@ -81,6 +81,10 @@ public class WifiChipAidlImpl implements IWifiChip {
     private android.hardware.wifi.IWifiChipEventCallback mHalCallback;
     private WifiChip.Callback mFrameworkCallback;
     private final Object mLock = new Object();
+
+    // cannon: 见 getCapabilitiesInternal() 里的说明。芯片特性集只向 HAL 取一次。
+    private long mCachedChipFeatureSet = 0L;
+    private boolean mChipFeatureSetQueried = false;
     private Context mContext;
     private SsidTranslator mSsidTranslator;
 
@@ -401,8 +405,18 @@ public class WifiChipAidlImpl implements IWifiChip {
         synchronized (mLock) {
             try {
                 if (!checkIfaceAndLogFailure(methodStr)) return featuresResp;
-                long halFeatureSet = mWifiChip.getFeatureSet();
-                featuresResp.setValue(halToFrameworkChipFeatureSet(halFeatureSet));
+                // cannon: MTK 的 vendor wifi HAL 在 IWifiChip.getFeatureSet() 里没有对
+                // iface 句柄做 NULL 检查。芯片上只要存在它不认识的接口（AP 的 ap0），
+                // libwifi-hal.so 的 wifi_get_supported_feature_set() 就会解引用空句柄
+                // （SIGSEGV, fault addr 0x10），整个 HAL 进程死掉，wlan0 和 ap0 一起消失
+                // —— 表现为「开热点后 WiFi 和热点都关」。芯片特性集在生命周期内不变，
+                // 所以只向 HAL 取一次，之后一律用缓存，彻底避开那条崩溃路径。
+                if (!mChipFeatureSetQueried) {
+                    long halFeatureSet = mWifiChip.getFeatureSet();
+                    mCachedChipFeatureSet = halToFrameworkChipFeatureSet(halFeatureSet);
+                    mChipFeatureSetQueried = true;
+                }
+                featuresResp.setValue(mCachedChipFeatureSet);
                 featuresResp.setStatusCode(WifiHal.WIFI_STATUS_SUCCESS);
             } catch (RemoteException e) {
                 handleRemoteException(e, methodStr);
