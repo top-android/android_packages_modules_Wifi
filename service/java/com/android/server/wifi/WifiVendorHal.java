@@ -867,10 +867,6 @@ public class WifiVendorHal {
         mCachedWifiChipInfos.put(chip.getId(), wifiChipInfo);
     }
 
-    // cannon: 见 getSupportedFeatureSet() 里的说明。芯片特性集只向 HAL 取一次。
-    private long mCachedChipFeatureSet = 0L;
-    private boolean mChipFeatureSetQueried = false;
-
     /**
      * Get the supported features
      *
@@ -887,22 +883,12 @@ public class WifiVendorHal {
 
         synchronized (sLock) {
             if (mWifiChip != null) {
-                // cannon: MTK 的 vendor wifi HAL 在 IWifiChip.getFeatureSet() 里没有对
-                // iface 句柄做 NULL 检查。只要芯片上存在它不认识的接口（AP 的 ap0），
-                // libwifi-hal.so 的 wifi_get_supported_feature_set() 就会解引用空句柄
-                // （SIGSEGV, fault addr 0x10），整个 HAL 进程死掉，wlan0 和 ap0 一起消失
-                // —— 表现为「开热点后 WiFi 和热点都关」。所以只向 HAL 问一次并缓存。
-                if (!mChipFeatureSetQueried) {
-                    WifiChip.Response<Long> capsResp = mWifiChip.getCapabilitiesAfterIfacesExist();
-                    mChipFeatureSetQueried = true;
-                    if (capsResp.getStatusCode() == WifiHal.WIFI_STATUS_SUCCESS) {
-                        mCachedChipFeatureSet = capsResp.getValue();
-                    } else if (capsResp.getStatusCode()
-                            == WifiHal.WIFI_STATUS_ERROR_REMOTE_EXCEPTION) {
-                        return 0;
-                    }
+                WifiChip.Response<Long> capsResp = mWifiChip.getCapabilitiesAfterIfacesExist();
+                if (capsResp.getStatusCode() == WifiHal.WIFI_STATUS_SUCCESS) {
+                    featureSet = capsResp.getValue();
+                } else if (capsResp.getStatusCode() == WifiHal.WIFI_STATUS_ERROR_REMOTE_EXCEPTION) {
+                    return 0;
                 }
-                featureSet = mCachedChipFeatureSet;
             }
 
             WifiStaIface iface = getStaIface(ifaceName);

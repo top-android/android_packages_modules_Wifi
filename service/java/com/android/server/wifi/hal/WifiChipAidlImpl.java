@@ -83,8 +83,11 @@ public class WifiChipAidlImpl implements IWifiChip {
     private final Object mLock = new Object();
 
     // cannon: 见 getCapabilitiesInternal() 里的说明。芯片特性集只向 HAL 取一次。
-    private long mCachedChipFeatureSet = 0L;
-    private boolean mChipFeatureSetQueried = false;
+    // 必须是 static：HalDeviceManager.getAllChipInfo() 每次都会通过 mWifiHal.getChip()
+    // 新建一个 WifiChipAidlImpl 实例，实例字段的缓存活不过一次调用。
+    private static final Object sChipFeatureSetLock = new Object();
+    private static long sCachedChipFeatureSet = 0L;
+    private static boolean sChipFeatureSetQueried = false;
     private Context mContext;
     private SsidTranslator mSsidTranslator;
 
@@ -411,12 +414,14 @@ public class WifiChipAidlImpl implements IWifiChip {
                 // （SIGSEGV, fault addr 0x10），整个 HAL 进程死掉，wlan0 和 ap0 一起消失
                 // —— 表现为「开热点后 WiFi 和热点都关」。芯片特性集在生命周期内不变，
                 // 所以只向 HAL 取一次，之后一律用缓存，彻底避开那条崩溃路径。
-                if (!mChipFeatureSetQueried) {
-                    long halFeatureSet = mWifiChip.getFeatureSet();
-                    mCachedChipFeatureSet = halToFrameworkChipFeatureSet(halFeatureSet);
-                    mChipFeatureSetQueried = true;
+                synchronized (sChipFeatureSetLock) {
+                    if (!sChipFeatureSetQueried) {
+                        long halFeatureSet = mWifiChip.getFeatureSet();
+                        sCachedChipFeatureSet = halToFrameworkChipFeatureSet(halFeatureSet);
+                        sChipFeatureSetQueried = true;
+                    }
+                    featuresResp.setValue(sCachedChipFeatureSet);
                 }
-                featuresResp.setValue(mCachedChipFeatureSet);
                 featuresResp.setStatusCode(WifiHal.WIFI_STATUS_SUCCESS);
             } catch (RemoteException e) {
                 handleRemoteException(e, methodStr);
