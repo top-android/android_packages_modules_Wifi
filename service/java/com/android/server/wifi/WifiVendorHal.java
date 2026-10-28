@@ -1434,7 +1434,15 @@ public class WifiVendorHal {
     public WlanWakeReasonAndCounts getWlanWakeReasonCount() {
         synchronized (sLock) {
             if (mWifiChip == null) return null;
-            return mWifiChip.getDebugHostWakeReasonStats();
+            // cannon: MTK 的 libwifi-hal.so 里 getHalInfo() 不判空。
+            // 这条链路是 WifiChip::getDebugHostWakeReasonStatsInternal() ->
+            // WifiLegacyHal::getWakeReasonStats(getFirstActiveWlanIfaceName()) ->
+            // wifi_get_driver_memory_dump() -> getHalInfo(handle)，
+            // 只要接口句柄表里对应项是空，就直接 SIGSEGV（fault addr 0x0）把 HAL 打死。
+            // 触发者非常日常：dumpsys wifi（WifiServiceImpl.java 的 dump() 里会调这里），
+            // 也就是说跑一次 dumpsys 就可能让 WiFi 断掉。这个统计只用于 dumpsys，
+            // 直接不向 HAL 取。
+            return null;
         }
     }
 
