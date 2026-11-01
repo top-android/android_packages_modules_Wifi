@@ -2975,16 +2975,19 @@ public class HalDeviceManager {
     private BitSet getChipCapabilities(@NonNull WifiChip wifiChip) {
         if (wifiChip == null) return new BitSet();
 
-        WifiChip.Response<BitSet> capsResp = wifiChip.getCapabilitiesBeforeIfacesExist();
-        if (capsResp.getStatusCode() == WifiHal.WIFI_STATUS_SUCCESS) {
-            return capsResp.getValue();
-        } else if (capsResp.getStatusCode() != WifiHal.WIFI_STATUS_ERROR_REMOTE_EXCEPTION) {
-            // Non-remote exception here is likely because HIDL HAL < v1.5
-            // does not support getting capabilities before creating an interface.
-            return CHIP_CAPABILITY_UNINITIALIZED;
-        } else { // remote exception
-            return new BitSet();
-        }
+        // cannon A15 老 vendor 适配：本机 wifi 原生栈是 MTK A12 闭源 blob
+        // (android.hardware.wifi-service-lazy + libwifi-hal.so)。其 AIDL 实现里
+        // getCapabilitiesBeforeIfacesExist / getCapabilitiesAfterIfacesExist 都最终走到
+        // WifiChipAidlImpl.getCapabilitiesInternal() → IWifiChip.getFeatureSet() →
+        // 闭源 wifi_legacy_hal.cpp wifi_get_supported_feature_set()；而本机开机即常驻
+        // ap0/p2p0/wlan1 伪接口，其 interface_info->handle 为空，解引用空指针
+        // SIGSEGV(fault 0x10) → wifi HAL 崩溃 → wlan0 消失、WiFi 反复重启
+        // （WifiVendorHal.getSupportedFeatureSet 已在 BUILD(M) 绕开，此处为第二处、也是最后一处
+        // 会到达 IWifiChip.getFeatureSet 的代码路径）。闭源 blob 无法判空，故此处直接跳过能力
+        // 查询，返回 CHIP_CAPABILITY_UNINITIALIZED —— 语义等价"老 HAL 不支持能力查询"：
+        // areChipCapabilitiesSupported() 遇到 UNINITIALIZED 直接 return true（不按能力过滤接口），
+        // 接口创建/热点/STA 行为不受影响。
+        return CHIP_CAPABILITY_UNINITIALIZED;
     }
 
     /**
