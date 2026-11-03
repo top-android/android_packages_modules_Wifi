@@ -868,38 +868,17 @@ public class WifiVendorHal {
         mCachedWifiChipInfos.put(chip.getId(), wifiChipInfo);
     }
 
-    /**
-     * Get the supported features
-     *
-     * The result may differ depending on the mode (STA or AP)
-     *
-     * @param ifaceName Name of the interface.
-     * @return BitSet defined by WifiManager.WIFI_FEATURE_*
-     */
+    // cannon A15 老 vendor 适配：MTK A12 闭源 wifi HAL（android.hardware.wifi-service-lazy + libwifi-hal.so，
+    // BuildId 798edac8…，PRODUCT_COPY_FILES 覆盖的 blob）的 IWifiChip/IWifiStaIface.getFeatureSet() 在本机
+    // 因常驻伪接口(ap0/p2p0/wlan1)拿到空 wifi_handle，进 wifi_get_supported_feature_set 解引用空指针
+    // SIGSEGV(fault 0x10) → HAL 崩溃 → wlan0 消失、WiFi 反复重启（开热点时更明显）。
+    // 该 HAL 为闭源 blob 无法判空，故彻底绕开其 feature 查询：基础能力(INFRA/HOTSPOT/P2P/AWARE)由下方
+    // mHalDeviceManager.getSupportedIfaceTypes() 提供，WPA3/OWE/DPP/MBO/OCE 等由 supplicant 侧
+    // (WifiNative.getSupportedFeatureSetInternal 的 getAdvancedCapabilities/getWpaDriverFeatureSet)另补，功能不受影响。
     public BitSet getSupportedFeatureSet(@NonNull String ifaceName) {
         BitSet featureSet = new BitSet();
         if (!mHalDeviceManager.isStarted() || !mHalDeviceManager.isSupported()) {
             return getSupportedFeatureSetFromPackageManager();
-        }
-
-        synchronized (sLock) {
-            if (mWifiChip != null) {
-                WifiChip.Response<BitSet> capsResp = mWifiChip.getCapabilitiesAfterIfacesExist();
-                if (capsResp.getStatusCode() == WifiHal.WIFI_STATUS_SUCCESS) {
-                    featureSet = capsResp.getValue();
-                } else if (capsResp.getStatusCode() == WifiHal.WIFI_STATUS_ERROR_REMOTE_EXCEPTION) {
-                    return new BitSet();
-                }
-            }
-
-            WifiStaIface iface = getStaIface(ifaceName);
-            if (iface != null) {
-                featureSet.or(iface.getCapabilities());
-                if (mHalDeviceManager.is24g5gDbsSupported(iface)
-                        || mHalDeviceManager.is5g6gDbsSupported(iface)) {
-                    featureSet.set(WifiManager.WIFI_FEATURE_DUAL_BAND_SIMULTANEOUS);
-                }
-            }
         }
 
         if (mWifiGlobals.isWpa3SaeH2eSupported()) {
@@ -1435,7 +1414,14 @@ public class WifiVendorHal {
     public WlanWakeReasonAndCounts getWlanWakeReasonCount() {
         synchronized (sLock) {
             if (mWifiChip == null) return null;
-            return mWifiChip.getDebugHostWakeReasonStats();
+            // cannon A15 老 vendor 适配（移植自 A14 修法）：MTK 闭源 libwifi-hal.so 的
+            // getHalInfo() 不判空。本链路 WifiChip::getDebugHostWakeReasonStatsInternal()
+            // -> WifiLegacyHal::getWakeReasonStats(getFirstActiveWlanIfaceName())
+            // -> wifi_get_driver_memory_dump() -> getHalInfo(handle)；只要接口句柄表里对应项为空
+            // 就解引用空指针 SIGSEGV(fault 0x0) 打死整个 wifi HAL（wlan0+ap0 一起消失）。
+            // 触发者日常：dumpsys wifi / bugreport 的 WifiServiceImpl.dump()。此统计仅用于 dumpsys，
+            // 直接不向 HAL 取。A15 原先漏了这处（只带了特性集那半），补齐。
+            return null;
         }
     }
 
